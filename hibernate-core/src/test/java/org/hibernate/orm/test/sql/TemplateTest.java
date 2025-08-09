@@ -135,6 +135,183 @@ public class TemplateTest {
 				"select {@}." + dialect.quote("`first`") + " from users fetch first 1 row only", factory );
 	}
 
+	@Test
+	@JiraKey("HHH-19695")
+	public void testNamedParametersAndBooleans(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		Dialect dialect = factory.getJdbcServices().getDialect();
+		final String expectedTrue = dialect.toBooleanValueString(true);
+		final String expectedFalse = dialect.toBooleanValueString(false);
+		assertWhereStringTemplate(
+				"where active = true and disabled = false and status = :p",
+				"where {@}.active = " + expectedTrue + " and {@}.disabled = " + expectedFalse + " and {@}.status = :p",
+				factory
+		);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testQuotedIdentifierAfterDot(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		Dialect dialect = factory.getJdbcServices().getDialect();
+		assertWhereStringTemplate(
+				"t.`hello` = 1",
+				"t." + dialect.quote("`hello`") + " = 1",
+				factory
+		);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testMultipleTablesCommaSeparated(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		assertWhereStringTemplate(
+				"select * from t, u where t.id = u.id",
+				"select * from t, u where t.id = u.id",
+				factory
+		);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testTrimAndCastClosures(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		Dialect dialect = factory.getJdbcServices().getDialect();
+		// trim with FROM
+		assertWhereStringTemplate(
+				"trim(from name)",
+				"trim(from {@}.name)",
+				factory
+		);
+		// cast with AS and closing parenthesis resetting state
+		assertWhereStringTemplate(
+				"cast(`val` as varchar(10))",
+				"cast({@}." + dialect.quote("`val`") + " as varchar(10))",
+				factory
+		);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testLiteralPrefixesWithBlanks(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		// extra blanks between literal prefix and quote
+		assertWhereStringTemplate(
+				"where date between date    '2000-12-1' and date    '2002-12-2'",
+				"where {@}.date between date    '2000-12-1' and date    '2002-12-2'",
+				factory
+		);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testRenderTransformerReadFragment() {
+		String frag = "col1 + col2";
+		String rendered = Template.renderTransformerReadFragment(frag, "col1", "col2");
+		org.junit.jupiter.api.Assertions.assertEquals("{@}.col1 + {@}.col2", rendered);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testCollectColumnNames(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		String rendered = Template.renderWhereStringTemplate(
+				"where a = 1 and b = 2",
+				factory.getJdbcServices().getDialect(),
+				factory.getTypeConfiguration()
+		);
+		java.util.List<String> names = Template.collectColumnNames(rendered);
+		org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of("a", "b"), names);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testDialectQuoteTokensOpenClose(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		Dialect dialect = factory.getJdbcServices().getDialect();
+		// Use dialect quote tokens directly, not backticks
+		String s = dialect.openQuote() + "hello" + dialect.closeQuote() + " = 1";
+		assertWhereStringTemplate(
+				s,
+				"{@}." + dialect.quote("`hello`") + " = 1",
+				factory
+		);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testEndsWithDotPreventsAliasBeforeQuoted(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		Dialect dialect = factory.getJdbcServices().getDialect();
+		assertWhereStringTemplate(
+				"t." + dialect.openQuote() + "c" + dialect.closeQuote(),
+				"t." + dialect.quote("`c`"),
+				factory
+		);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testFetchAloneNotAClause(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		// 'fetch' alone should not start a fetch clause and should remain as-is
+		assertWhereStringTemplate("fetch", "fetch", factory);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testFetchClauseEndsOnOtherToken(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		// After a valid sequence, an unexpected token ends the clause; identifier should then be qualified
+		assertWhereStringTemplate(
+				"fetch first 1 rows nonsense",
+				"fetch first 1 rows {@}.nonsense",
+				factory
+		);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testIsTypePreventsQualification(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		// A known type token should not be qualified
+		assertWhereStringTemplate(
+				"varchar + foo",
+				"varchar + {@}.foo",
+				factory
+		);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testTimeZoneLiteralWithoutWith(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		assertWhereStringTemplate(
+				"time zone 'a'",
+				"time zone 'a'",
+				factory
+		);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testFunctionDetectionByParen(SessionFactoryScope scope) {
+		SessionFactoryImplementor factory = scope.getSessionFactory();
+		assertWhereStringTemplate(
+				"coalesce(foo,bar)",
+				"coalesce({@}.foo,{@}.bar)",
+				factory
+		);
+	}
+
+	@Test
+	@JiraKey("HHH-19695")
+	public void testCollectColumnNamesEndOfString() {
+		// Directly exercise end-of-string capture branch
+		java.util.List<String> names = Template.collectColumnNames("{@}.last");
+		org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of("last"), names);
+	}
+
 	private static void assertWhereStringTemplate(String sql, SessionFactoryImplementor sf) {
 		assertEquals( sql,
 				Template.renderWhereStringTemplate(
